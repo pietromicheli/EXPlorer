@@ -7,8 +7,9 @@ from PyQt6.QtGui import QPixmap, QImage
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 from matplotlib import cm
+import time
 
-FPS = 15.6
+FPS = 15
 
 # ---------------------- Base Module ---------------------- #
 class BaseModule(QWidget):
@@ -22,19 +23,46 @@ class BaseModule(QWidget):
 class VideoModule(BaseModule,):
     def __init__(self, video_path, fps=15, min_size=(500,300), parent=None):
         super().__init__(parent)
+        # check and manage multiple videos
+        if not isinstance(video_path, list):
+            video_path = [video_path]
+
+        video_unique_id = {p:i for i,p in enumerate(np.unique(video_path))}
+        self.videos_caps = [cv2.VideoCapture(path) for path in video_unique_id]
+
+        # map rec indices to videos indices
+        frames_videos = []
+        all_frames = 0
+        for stim_name in video_path:
+            stim_id = video_unique_id[stim_name]
+
+            nframes = int(self.videos_caps[stim_id].get(cv2.CAP_PROP_FRAME_COUNT))
+            # get resampling factor
+            true_fps = self.videos_caps[stim_id].get(cv2.CAP_PROP_FPS)
+            factor = int(round(true_fps/fps))
+            frames_videos.extend((stim_id,f) for f in range(0,nframes,factor))
+            all_frames += nframes
+
+        self.stim_map = {}
+        for f,s in zip(range(all_frames),frames_videos):
+            self.stim_map[f] = {'id':s[0],'frame':s[1]}
+
         self.label = QLabel()
         self.label.setMinimumSize(min_size[0], min_size[1])
-        self.cap = cv2.VideoCapture(video_path)
-        true_fps = self.cap.get(cv2.CAP_PROP_FPS)
-        self.factor = int(round(true_fps/fps))
+        
         layout = QHBoxLayout()
         layout.addWidget(self.label)
         self.setLayout(layout)
-        
+
+        self.t0 = time.time()
 
     def update_frame(self, frame_idx: int):
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx*self.factor)
-        ret, frame = self.cap.read()
+        
+        id,frame = self.stim_map[frame_idx].values()
+
+        cap = self.videos_caps[id]
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame)
+        ret, frame = cap.read()
         if ret:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             h, w = frame.shape
@@ -42,6 +70,9 @@ class VideoModule(BaseModule,):
             self.label.setPixmap(QPixmap.fromImage(img).scaled(
                 self.label.size(), Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation))
+        
+        print(f'fps: {1/(time.time()-self.t0)}', end='\r')
+        self.t0 = time.time()
 
 # ---------------------- Heatmap Module ---------------------- #
 class HeatmapModule(BaseModule):
@@ -177,7 +208,7 @@ class Projection3DModule(BaseModule):
 
 # ---------------------- Main Viewer ---------------------- #
 class TimeSeriesViewer(QWidget):
-    def __init__(self, layout_config, data_dict, win=600):
+    def __init__(self, layout_config, data_dict, fps, win=600):
         super().__init__()
         self.setStyleSheet("background-color: black; color: white;")  # make entire app black
 
@@ -194,7 +225,7 @@ class TimeSeriesViewer(QWidget):
             key = elem.get('data_key')
             cfg = elem.get('cfg', {})
             if t == 'video':
-                module = VideoModule(data_dict[key], **cfg)
+                module = VideoModule(data_dict[key], fps=fps, **cfg)
             elif t == 'heatmap':
                 module = HeatmapModule(data_dict[key], win=self.win)
             elif t == 'trace':
@@ -207,14 +238,20 @@ class TimeSeriesViewer(QWidget):
             layout.addWidget(module, r, c)
             self.modules.append(module)
 
-        # Slider + Play/Pause buttons
+        # Slider + timer + Play/Pause buttons
         controls_layout = QHBoxLayout()
+
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setMinimum(0)
         self.slider.setMaximum(self.nframes - 1)
         self.slider.setValue(0)
         self.slider.sliderMoved.connect(self.slider_moved)
         controls_layout.addWidget(self.slider)
+
+        # ⏱ Time display
+        self.time_label = QLabel("0.0 s")
+        self.time_label.setStyleSheet("color: white; font-weight: bold;")
+        controls_layout.addWidget(self.time_label)
 
         self.play_btn = QPushButton("Play")
         self.play_btn.clicked.connect(self.play)
@@ -230,7 +267,7 @@ class TimeSeriesViewer(QWidget):
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
-        self.timer.start(int(1000 // FPS))
+        self.timer.start(int(1000//FPS))
 
     def update_frame(self):
         for module in self.modules:
@@ -239,6 +276,10 @@ class TimeSeriesViewer(QWidget):
         self.slider.blockSignals(True)
         self.slider.setValue(self.frame_idx)
         self.slider.blockSignals(False)
+        time_sec = self.frame_idx / FPS
+        mins, secs = divmod(int(time_sec), 60)
+        self.time_label.setText(f"{mins:02}:{secs:02}")
+
 
     def slider_moved(self, value):
         self.frame_idx = value
@@ -246,7 +287,7 @@ class TimeSeriesViewer(QWidget):
 
     def play(self):
         if not self.timer.isActive():
-            self.timer.start(int(1000 // FPS))
+            self.timer.start(int(1000//FPS))
 
     def pause(self):
         if self.timer.isActive():
@@ -255,15 +296,18 @@ class TimeSeriesViewer(QWidget):
 
 # ---------------------- Run Function with Example ---------------------- #
 def run_example():
-    # Dummy data
-    neural_matrix = np.load(r'example_data\neural_data.npy')
-    pupil_area = np.load(r'example_data\pupilArea_mm2.npy')
-    pupil_movement = np.load(r'example_data\pupilMotion_mm.npy')
-    velocity = np.load(r'example_data\velocity.npy')
-    neural_proj = np.load(r'example_data\data_GECO_3D.npy')
-    video = r'example_data\TOE.mp4'
 
-    
+    neural_matrix = np.load(r'example_data\neural_data.npy')
+    data_len = neural_matrix.shape[1]
+    # trim other data stream according to the neural data
+    pupil_area = np.load(r'example_data\pupilArea_mm2.npy')[:data_len]
+    pupil_movement = np.load(r'example_data\pupilMotion_mm.npy')[:data_len]
+    velocity = np.load(r'example_data\velocity.npy')[:data_len]
+    neural_proj = np.load(r'example_data\data_GECO_3D.npy')[:data_len]
+    video_behav = r'example_data\TOE.mp4'
+    # the dataset was recorded during the presentation of the following stimulation protocol:
+    # ISI(10s)-Trial1(TOE,~4 min) X3
+    textures_stim = [r'example_data\textures\interval_10s.mp4',r'example_data\textures\TouchOfEvil.mp4']*3+[r'example_data\textures\interval_10s.mp4']
     
     # Layout config
     layout_config = {
@@ -274,8 +318,9 @@ def run_example():
             {'row': 1, 'col': 0, 'type': 'trace', 'data_key': 'pupil_area', 'cfg': {'label': 'Pupil Size', 'color': 'g'}},
             {'row': 2, 'col': 0, 'type': 'trace', 'data_key': 'velocity', 'cfg': {'label': 'Velocity', 'color': 'b'}},
             {'row': 3, 'col': 0, 'type': 'trace', 'data_key': 'pupil_movement', 'cfg': {'label': 'Pupil Movement', 'color': 'r'}},
-            {'row': 0, 'col': 1, 'type': 'projection3d', 'data_key': 'neural_proj'},
-            {'row': 1, 'col': 1, 'type': 'video', 'data_key': 'video', 'cfg': {'fps': 15.6, 'min_size':(400,300)}}
+            {'row': 0, 'col': 1, 'type': 'video', 'data_key': 'video', 'cfg': {'min_size':(400,300)}},
+            {'row': 1, 'col': 1, 'type': 'video', 'data_key': 'textures_stim', 'cfg': {'min_size':(400,300)}},
+            {'row': 3, 'col': 1, 'type': 'projection3d', 'data_key': 'neural_proj'},
         ]
     }
 
@@ -285,11 +330,12 @@ def run_example():
         'pupil_movement': pupil_movement,
         'velocity': velocity,
         'neural_proj': neural_proj,
-        'video': video
+        'video': video_behav,
+        'textures_stim': textures_stim
     }
 
     app = QApplication(sys.argv)
-    viewer = TimeSeriesViewer(layout_config, data_dict, win=200)
+    viewer = TimeSeriesViewer(layout_config, data_dict, win=200, fps=15.6)
     viewer.show()
     sys.exit(app.exec())
 
