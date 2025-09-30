@@ -1,7 +1,7 @@
 import sys
 import numpy as np
 import cv2
-from PyQt6.QtWidgets import QApplication, QWidget, QGridLayout, QLabel, QPushButton, QSlider, QHBoxLayout, QVBoxLayout
+from PyQt6.QtWidgets import QApplication, QWidget, QGridLayout, QLabel, QPushButton, QSlider, QHBoxLayout, QVBoxLayout, QInputDialog
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QPixmap, QImage
 import pyqtgraph as pg
@@ -238,7 +238,7 @@ class TimeSeriesViewer(QWidget):
             layout.addWidget(module, r, c)
             self.modules.append(module)
 
-        # Slider + timer + Play/Pause buttons
+        # Slider + timer + speed + Play/Pause buttons
         controls_layout = QHBoxLayout()
 
         self.slider = QSlider(Qt.Orientation.Horizontal)
@@ -248,10 +248,15 @@ class TimeSeriesViewer(QWidget):
         self.slider.sliderMoved.connect(self.slider_moved)
         controls_layout.addWidget(self.slider)
 
-        # ⏱ Time display
         self.time_label = QLabel("0.0 s")
         self.time_label.setStyleSheet("color: white; font-weight: bold;")
         controls_layout.addWidget(self.time_label)
+
+        self.speed_btn = QPushButton("Set Speed")
+        self.speed_btn.clicked.connect(self.set_speed)
+        controls_layout.addWidget(self.speed_btn)
+        # Default speed factor
+        self.speed_factor = 1
 
         self.play_btn = QPushButton("Play")
         self.play_btn.clicked.connect(self.play)
@@ -272,7 +277,9 @@ class TimeSeriesViewer(QWidget):
     def update_frame(self):
         for module in self.modules:
             module.update_frame(self.frame_idx)
-        self.frame_idx = (self.frame_idx + 1) % self.nframes
+
+        self.frame_idx = (self.frame_idx + self.speed_factor) % self.nframes
+
         self.slider.blockSignals(True)
         self.slider.setValue(self.frame_idx)
         self.slider.blockSignals(False)
@@ -284,6 +291,13 @@ class TimeSeriesViewer(QWidget):
     def slider_moved(self, value):
         self.frame_idx = value
         self.update_frame()
+
+    def set_speed(self):
+        # Prompt the user for an integer
+        speed, ok = QInputDialog.getInt(self, "Playback Speed", "Read every n frames (integer >=1):", 
+                                    value=self.speed_factor, min=1)
+        if ok:
+            self.speed_factor = speed
 
     def play(self):
         if not self.timer.isActive():
