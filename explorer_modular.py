@@ -1,7 +1,8 @@
+from collections import defaultdict
 import sys
 import numpy as np
 import cv2
-from PyQt6.QtWidgets import QApplication, QWidget, QGridLayout, QLabel, QPushButton, QSlider, QHBoxLayout, QVBoxLayout, QInputDialog
+from PyQt6.QtWidgets import QApplication, QWidget, QGridLayout, QLabel, QPushButton, QSlider, QHBoxLayout, QVBoxLayout, QInputDialog, QMainWindow, QSizePolicy
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QPixmap, QImage
 import pyqtgraph as pg
@@ -47,12 +48,18 @@ class VideoModule(BaseModule,):
         for f,s in zip(range(all_frames),frames_videos):
             self.stim_map[f] = {'id':s[0],'frame':s[1]}
 
+        # Container widget
+        self.widget = QWidget()
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # QLabel for video display
         self.label = QLabel()
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.setMinimumSize(min_size[0], min_size[1])
-        
-        layout = QHBoxLayout()
         layout.addWidget(self.label)
-        self.setLayout(layout)
+
+        self.widget.setLayout(layout)
 
         self.t0 = time.time()
 
@@ -87,13 +94,15 @@ class HeatmapModule(BaseModule):
         self.nframes = self.data.shape[1]
 
         # Main layout
+        self.widget = QWidget()
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        self.setLayout(layout)
+
+        self.widget.setLayout(layout)
 
         # Heatmap display
-        self.widget = pg.GraphicsLayoutWidget()
-        self.view = self.widget.addViewBox()
+        self.hm_widget = pg.GraphicsLayoutWidget()
+        self.view = self.hm_widget.addViewBox()
         self.view.setAspectLocked(False)
         self.img = pg.ImageItem()
         cmap = pg.colormap.get('Greys', source='matplotlib')
@@ -101,7 +110,7 @@ class HeatmapModule(BaseModule):
         self.view.addItem(self.img)
         self.cursor = pg.InfiniteLine(pos=0, angle=90, pen=pg.mkPen('r', width=2))
         self.view.addItem(self.cursor)
-        layout.addWidget(self.widget)
+        
 
         # Slider container
         slider_container = QWidget()
@@ -111,6 +120,7 @@ class HeatmapModule(BaseModule):
 
         # Max slider (top)
         self.max_slider = QSlider(Qt.Orientation.Vertical)
+        self.max_slider.setFixedHeight(200)
         self.max_slider.setMinimum(int(self.hm_min * 1000))
         self.max_slider.setMaximum(int(self.hm_max * 1000))
         self.max_slider.setValue(int(self.hm_max * 1000))
@@ -119,6 +129,7 @@ class HeatmapModule(BaseModule):
 
         # Min slider (bottom)
         self.min_slider = QSlider(Qt.Orientation.Vertical)
+        self.min_slider.setFixedHeight(200)
         self.min_slider.setMinimum(int(self.hm_min * 1000))
         self.min_slider.setMaximum(int(self.hm_max * 1000))
         self.min_slider.setValue(int(self.hm_min * 1000))
@@ -126,6 +137,7 @@ class HeatmapModule(BaseModule):
         slider_layout.addWidget(self.min_slider)
 
         layout.addWidget(slider_container)
+        layout.addWidget(self.hm_widget)
 
     def update_frame(self, frame_idx: int):
         half_win = self.win // 2
@@ -185,7 +197,7 @@ class TraceModule(BaseModule):
 
 # ---------------------- 3D Projection Module ---------------------- #
 class Projection3DModule(BaseModule):
-    def __init__(self, neural_proj, parent=None):
+    def __init__(self, neural_proj, min_size=(500,300), parent=None):
         super().__init__(parent)
         self.data = neural_proj
         self.widget = gl.GLViewWidget()
@@ -195,6 +207,8 @@ class Projection3DModule(BaseModule):
         layout = QHBoxLayout()
         layout.addWidget(self.widget)
         self.setLayout(layout)
+
+        self.widget.setMinimumSize(min_size[0], min_size[1])
 
     def update_frame(self, frame_idx: int):
         if frame_idx > 0:
@@ -207,7 +221,7 @@ class Projection3DModule(BaseModule):
 # ... keep all previous imports and module classes ...
 
 # ---------------------- Main Viewer ---------------------- #
-class TimeSeriesViewer(QWidget):
+class TimeSeriesViewer(QMainWindow):
     def __init__(self, layout_config, data_dict, fps, win=600):
         super().__init__()
         self.setStyleSheet("background-color: black; color: white;")  # make entire app black
@@ -216,27 +230,45 @@ class TimeSeriesViewer(QWidget):
         self.frame_idx = 0
         self.win = win
         self.nframes = max([v.shape[0] if isinstance(v, np.ndarray) else 1000 for v in data_dict.values()])  # fallback
-        layout = QGridLayout()
-        self.setLayout(layout)
 
+        self.module_map = {
+                        'video': VideoModule,
+                        'heatmap': HeatmapModule,
+                        'trace': TraceModule,
+                        'projection3d': Projection3DModule      
+            }
+
+        layout = QGridLayout()
+
+        # Group elements by grid position
+        grouped = defaultdict(list)
+        
         for elem in layout_config['elements']:
-            r, c = elem['row'], elem['col']
-            t = elem['type']
-            key = elem.get('data_key')
-            cfg = elem.get('cfg', {})
-            if t == 'video':
-                module = VideoModule(data_dict[key], fps=fps, **cfg)
-            elif t == 'heatmap':
-                module = HeatmapModule(data_dict[key], win=self.win)
-            elif t == 'trace':
-                module = TraceModule(data_dict[key], **cfg, win=self.win)
-            elif t == 'projection3d':
-                module = Projection3DModule(data_dict[key])
-                module.widget.setMinimumSize(500, 300)  # ensure visible
+            grouped[(elem['row'], elem['col'])].append(elem)
+
+        for (r, c), elems in grouped.items():
+            if len(elems) == 1:
+                # Just one module, add directly
+                elem = elems[0]
+                module = self.make_module(elem, data_dict)
+                layout.addWidget(module.widget, r, c)
+                self.modules.append(module)
             else:
-                continue
-            layout.addWidget(module, r, c)
-            self.modules.append(module)
+                # Multiple modules → put inside a container
+                container = QWidget()
+                vbox = QVBoxLayout()
+                vbox.setContentsMargins(0, 0, 0, 0)
+                for elem in elems:
+                    module = self.make_module(elem, data_dict)
+                    vbox.addWidget(module.widget)
+                    self.modules.append(module)
+                container.setLayout(vbox)
+                layout.addWidget(container, r, c)
+
+        # Wrap into QWidget
+        container = QWidget()
+        container.setLayout(layout)
+        self.setCentralWidget(container)
 
         # Slider + timer + speed + Play/Pause buttons
         controls_layout = QHBoxLayout()
@@ -273,6 +305,14 @@ class TimeSeriesViewer(QWidget):
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
         self.timer.start(int(1000//FPS))
+
+    def make_module(self, elem, data_dict):
+        t = elem['type']
+        key = elem.get('data_key')
+        cfg = elem.get('cfg', {})
+
+        module = self.module_map[t](data_dict[key], **cfg)
+        return module
 
     def update_frame(self):
         for module in self.modules:
@@ -325,16 +365,16 @@ def run_example():
     
     # Layout config
     layout_config = {
-        'rows': 4,
+        'rows': 2,
         'cols': 2,
         'elements': [
             {'row': 0, 'col': 0, 'type': 'heatmap', 'data_key': 'neural_matrix'},
             {'row': 1, 'col': 0, 'type': 'trace', 'data_key': 'pupil_area', 'cfg': {'label': 'Pupil Size', 'color': 'g'}},
-            {'row': 2, 'col': 0, 'type': 'trace', 'data_key': 'velocity', 'cfg': {'label': 'Velocity', 'color': 'b'}},
-            {'row': 3, 'col': 0, 'type': 'trace', 'data_key': 'pupil_movement', 'cfg': {'label': 'Pupil Movement', 'color': 'r'}},
+            {'row': 1, 'col': 0, 'type': 'trace', 'data_key': 'velocity', 'cfg': {'label': 'Velocity', 'color': 'b'}},
+            {'row': 1, 'col': 0, 'type': 'trace', 'data_key': 'pupil_movement', 'cfg': {'label': 'Pupil Movement', 'color': 'r'}},
             {'row': 0, 'col': 1, 'type': 'video', 'data_key': 'video', 'cfg': {'min_size':(400,300)}},
-            {'row': 1, 'col': 1, 'type': 'video', 'data_key': 'textures_stim', 'cfg': {'min_size':(400,300)}},
-            {'row': 3, 'col': 1, 'type': 'projection3d', 'data_key': 'neural_proj'},
+            {'row': 0, 'col': 1, 'type': 'video', 'data_key': 'textures_stim', 'cfg': {'min_size':(400,300)}},
+            {'row': 1, 'col': 1, 'type': 'projection3d', 'data_key': 'neural_proj', 'cfg': {'min_size':(400,300)}},
         ]
     }
 
