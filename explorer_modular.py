@@ -4,7 +4,8 @@ import numpy as np
 import cv2
 from PyQt6.QtWidgets import QApplication, QWidget, QGridLayout, QLabel, QPushButton, QSlider, QHBoxLayout, QVBoxLayout, QInputDialog, QMainWindow, QSizePolicy
 from PyQt6.QtCore import QTimer, Qt
-from PyQt6.QtGui import QPixmap, QImage
+from PyQt6.QtGui import QPixmap, QImage, QVector3D
+
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 from matplotlib import cm
@@ -197,25 +198,84 @@ class TraceModule(BaseModule):
 
 # ---------------------- 3D Projection Module ---------------------- #
 class Projection3DModule(BaseModule):
-    def __init__(self, neural_proj, min_size=(500,300), parent=None):
+    def __init__(self, neural_proj, trial_segments=None, colormaps=None,
+                 default_cmap='viridis', default_alpha=0.4, min_size=(500, 300), parent=None):
+
         super().__init__(parent)
         self.data = neural_proj
+        self.trial_segments = trial_segments if trial_segments is not None else {}
+        self.colormaps = colormaps if colormaps is not None else {}
+        self.default_cmap = default_cmap
+        self.default_alpha = default_alpha
+
+        # Create GL widget
         self.widget = gl.GLViewWidget()
         self.widget.setCameraPosition(distance=1.25)
+
+        # Scatter plot item
         self.scatter = gl.GLScatterPlotItem(pos=np.zeros((1, 3)), color=(1, 0, 1, 1), size=3)
         self.widget.addItem(self.scatter)
+
+        # Layout wrapper
         layout = QHBoxLayout()
         layout.addWidget(self.widget)
         self.setLayout(layout)
-
         self.widget.setMinimumSize(min_size[0], min_size[1])
 
+        self.init_camera()
+
     def update_frame(self, frame_idx: int):
-        if frame_idx > 0:
-            pos = self.data[:frame_idx]
-            col = cm.cool(np.linspace(0, 1, len(pos)))
-            col[..., 3] = 0.4
-            self.scatter.setData(pos=pos, color=col, size=5)
+        if frame_idx == 0:
+            return
+
+        positions = self.data[:frame_idx]
+        colors = np.ones((len(positions), 4))  # default RGBA
+
+        # Reset all colors to default colormap first
+        default_cmap_obj = cm.get_cmap(self.default_cmap)
+        colors[:, :] = default_cmap_obj(np.linspace(0, 1, len(positions)))
+        colors[:, 3] = self.default_alpha
+
+        # Overwrite colors for trial segments
+        for trial_name, segments in self.trial_segments.items():
+            cmap_name = self.colormaps.get(trial_name, 'cool')
+            cmap = cm.get_cmap(cmap_name)
+            for start, end in segments:
+                # Clip to current frame_idx
+                start_clip = max(0, min(start, frame_idx))
+                end_clip = max(0, min(end, frame_idx))
+                if end_clip <= start_clip:
+                    continue
+                seg_len = end_clip - start_clip
+                # Generate colors spanning full colormap
+                seg_colors = cmap(np.linspace(0, 1, seg_len))
+                seg_colors[:, 3] = 0.8  # alpha for trial segments
+                colors[start_clip:end_clip] = seg_colors
+
+        self.scatter.setData(pos=positions, color=colors, size=5)
+
+    def init_camera(self):
+        if self.data is None or len(self.data) == 0:
+            return
+
+        # Compute min and max of data along each axis
+        mins = self.data.min(axis=0)
+        maxs = self.data.max(axis=0)
+        center_np = (mins + maxs) / 2  # numpy array (3,)
+        center = QVector3D(*center_np)  # convert to QVector3D
+
+        # Compute the maximum range for all axes to set distance
+        ranges = maxs - mins
+        max_range = np.max(ranges)
+        
+        # Set camera position to be along z-axis at distance proportional to data range
+        self.widget.setCameraPosition(
+            pos=center,           # target position
+            distance=max_range*2, # distance from target
+            elevation=20,         # degrees above xy-plane
+            azimuth=45            # rotation around z-axis
+        )
+
 
 # ---------------------- Main Viewer ---------------------- #
 # ... keep all previous imports and module classes ...
@@ -393,5 +453,57 @@ def run_example():
     viewer.show()
     sys.exit(app.exec())
 
+def run_example_dummy():
+
+    # --- Dummy data generation ---
+    n_neurons = 50
+    n_frames = 1000
+
+    # Heatmap (neural data)
+    neural_matrix = np.random.randn(n_neurons, n_frames)
+
+    # Traces
+    pupil_area = np.random.rand(n_frames) * 5 + 2      # example pupil size
+    velocity = np.random.rand(n_frames) * 2            # example locomotion velocity
+    pupil_movement = np.random.randn(n_frames)        # example pupil movement
+
+    # 3D projection
+    neural_proj = np.cumsum(np.random.randn(n_frames, 3), axis=0)  # random walk in 3D
+    trial_segments = {
+        'trial1': [(0, 100), (300, 400)],
+        'trial2': [(100, 300)]
+    }
+    colormaps = {
+        'trial1': 'cool',
+        'trial2': 'autumn'
+    }
+
+    # Layout config
+    layout_config = {
+        'rows': 2,
+        'cols': 2,
+        'elements': [
+            {'row': 0, 'col': 0, 'type': 'heatmap', 'data_key': 'neural_matrix'},
+            {'row': 1, 'col': 0, 'type': 'trace', 'data_key': 'pupil_area', 'cfg': {'label': 'Pupil Size', 'color': 'g'}},
+            {'row': 1, 'col': 0, 'type': 'trace', 'data_key': 'velocity', 'cfg': {'label': 'Velocity', 'color': 'b'}},
+            {'row': 1, 'col': 0, 'type': 'trace', 'data_key': 'pupil_movement', 'cfg': {'label': 'Pupil Movement', 'color': 'r'}},
+            {'row': 1, 'col': 1, 'type': 'projection3d', 'data_key': 'neural_proj', 'cfg': {'trial_segments': trial_segments, 'colormaps': colormaps, 'min_size':(400,300)}},
+        ]
+    }
+
+    data_dict = {
+        'neural_matrix': neural_matrix,
+        'pupil_area': pupil_area,
+        'pupil_movement': pupil_movement,
+        'velocity': velocity,
+        'neural_proj': neural_proj,
+    }
+
+    app = QApplication(sys.argv)
+    viewer = TimeSeriesViewer(layout_config, data_dict, win=200, fps=15.6)
+    viewer.show()
+    sys.exit(app.exec())
+
+
 if __name__ == '__main__':
-    run_example()
+    run_example_dummy()
