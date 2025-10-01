@@ -21,7 +21,7 @@ class BaseModule(QWidget):
 
 # ---------------------- Video Module ---------------------- #
 class VideoModule(BaseModule,):
-    def __init__(self, video_path, fps=15, min_size=(500,300), parent=None):
+    def __init__(self, video_path, fps=15.6, min_size=(500,300), parent=None):
         super().__init__(parent)
         # check and manage multiple videos
         if not isinstance(video_path, list):
@@ -39,8 +39,17 @@ class VideoModule(BaseModule,):
             nframes = int(self.videos_caps[stim_id].get(cv2.CAP_PROP_FRAME_COUNT))
             # get resampling factor
             true_fps = self.videos_caps[stim_id].get(cv2.CAP_PROP_FPS)
-            factor = int(round(true_fps/fps))
-            frames_videos.extend((stim_id,f) for f in range(0,nframes,factor))
+            factor = true_fps/fps
+            if factor < 1:
+                # upsample
+                factor = int(round(1/factor))
+                frames_videos.extend((stim_id,f) for f in np.repeat(np.arange(0,nframes), factor))
+                nframes = nframes*factor
+            else:
+                # downsample
+                factor = int(round(factor))
+                frames_videos.extend((stim_id,f) for f in range(0,nframes,factor))
+
             all_frames += nframes
 
         self.stim_map = {}
@@ -220,7 +229,7 @@ class Projection3DModule(BaseModule):
         self.setLayout(layout)
         self.widget.setMinimumSize(min_size[0], min_size[1])
 
-        self.init_camera()
+        # self.init_camera()
 
     def update_frame(self, frame_idx: int):
         if frame_idx == 0:
