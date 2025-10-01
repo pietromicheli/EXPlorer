@@ -50,7 +50,7 @@ trace_b = np.load('trace_b.npy')
 trace_c = np.load('trace_c.npy')
 projection_3d_data = np.load('projection_3d.npy')
 video_main = 'video_main.mp4'
-video_stimuli = 'video_stim1.mp4'
+video_stimuli = ['video_stim1.mp4', 'video_stim2.mp4']
 
 # --- Pack data in a dictionary ---
 data_dict = {
