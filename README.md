@@ -7,7 +7,7 @@ A **modular PyQt6/PyQtGraph application** for visualizing aligned neuroscience d
 ## Features
 
 - **Video playback**
-  - Display behavioral and stimulus videos side by side.
+  - Display multiple videos (e.g. behavior, stimulus, FOV ...), side by side.
   - Adjustable video size.
   
 - **Heatmap visualization**
