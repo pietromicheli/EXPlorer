@@ -1,13 +1,9 @@
 from collections import defaultdict
 import sys
 import numpy as np
-from PyQt6.QtWidgets import QApplication, QWidget, QGridLayout, QLabel, QPushButton, QSlider, QHBoxLayout, QVBoxLayout, QInputDialog, QMainWindow
+from PyQt6.QtWidgets import QApplication, QWidget, QGridLayout, QLabel, QPushButton, QSlider, QHBoxLayout, QVBoxLayout, QInputDialog, QMainWindow, QSizePolicy
 from PyQt6.QtCore import QTimer, Qt
-from modules import *
-
-FPS = 15
-
-
+from .modules import *
 
 # ---------------------- Main Viewer ---------------------- #
 class TimeSeriesViewer(QMainWindow):
@@ -53,6 +49,12 @@ class TimeSeriesViewer(QMainWindow):
                     self.modules.append(module)
                 container.setLayout(vbox)
                 layout.addWidget(container, r, c)
+
+        # make all rows and columns equally resizable
+        for r in range(layout_config['rows']):
+            layout.setRowStretch(r, 1)
+        for c in range(layout_config['cols']):
+            layout.setColumnStretch(c, 1)
 
         # Wrap into QWidget
         container = QWidget()
