@@ -8,6 +8,7 @@ from PyQt6.QtGui import QPixmap, QImage, QVector3D
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 from matplotlib import cm
+import matplotlib.colors as mpl_colors
 import time
 
 
@@ -21,7 +22,7 @@ class BaseModule(QWidget):
 
 # ---------------------- Video Module ---------------------- #
 class VideoModule(BaseModule,):
-    def __init__(self, video_path, fps=15.6, min_size=(500,300), parent=None):
+    def __init__(self, video_path, fps=15.6, max_size=(800,500), add_sliders=False, parent=None):
         super().__init__(parent)
         # check and manage multiple videos
         if not isinstance(video_path, list):
@@ -63,9 +64,32 @@ class VideoModule(BaseModule,):
 
         # QLabel for video display
         self.label = QLabel()
-        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label.setMinimumSize(min_size[0], min_size[1])
-        layout.addWidget(self.label)
+        self.label.setMaximumSize(max_size[0], max_size[1])
+        self.label.setScaledContents(True) 
+        layout.addWidget(self.label, 1)
+
+        # sliders container
+        slider_container = QWidget()
+        slider_layout = QHBoxLayout()
+        slider_layout.setContentsMargins(0, 0, 0, 0)
+        slider_container.setLayout(slider_layout)
+
+        # brightness slider (beta)
+        self.brightness_slider = QSlider(Qt.Orientation.Horizontal)
+        self.brightness_slider.setRange(-200, 200)   # offset range
+        self.brightness_slider.setValue(0)           # default = 0 offset
+        self.brightness_slider.setFixedWidth(200)
+
+        # contrast slider (alpha)
+        self.contrast_slider = QSlider(Qt.Orientation.Horizontal)
+        self.contrast_slider.setRange(10, 400)       # 0.1x to 3.0x
+        self.contrast_slider.setValue(100)           # default = 1.0x
+        self.contrast_slider.setFixedWidth(200)
+
+        if add_sliders:
+            slider_layout.addWidget(self.brightness_slider)
+            slider_layout.addWidget(self.contrast_slider)
+            layout.addWidget(slider_container, 0, Qt.AlignmentFlag.AlignHCenter)
 
         self.widget.setLayout(layout)
 
@@ -78,13 +102,22 @@ class VideoModule(BaseModule,):
         cap = self.videos_caps[id]
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame)
         ret, frame = cap.read()
-        if ret:
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            h, w = frame.shape
-            img = QImage(frame.data, w, h, w, QImage.Format.Format_Grayscale8)
-            self.label.setPixmap(QPixmap.fromImage(img).scaled(
-                self.label.size(), Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation))
+
+        if not ret:
+            return
+        
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        # contrast & brightness adjustments
+        alpha = self.contrast_slider.value() / 100.0   # contrast multiplier
+        beta = self.brightness_slider.value()          # brightness offset
+        frame = cv2.convertScaleAbs(frame, alpha=alpha, beta=beta)
+        
+        h, w = frame.shape
+        img = QImage(frame.data, w, h, w, QImage.Format.Format_Grayscale8)
+        self.label.setPixmap(QPixmap.fromImage(img).scaled(
+            self.label.size(), Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation))
         
         print(f'fps: {1/(time.time()-self.t0)}', end='\r')
         self.t0 = time.time()
@@ -118,7 +151,6 @@ class HeatmapModule(BaseModule):
         self.view.addItem(self.img)
         self.cursor = pg.InfiniteLine(pos=0, angle=90, pen=pg.mkPen('r', width=2))
         self.view.addItem(self.cursor)
-        
 
         # Slider container
         slider_container = QWidget()
@@ -128,7 +160,8 @@ class HeatmapModule(BaseModule):
 
         # Max slider (top)
         self.max_slider = QSlider(Qt.Orientation.Vertical)
-        self.max_slider.setFixedHeight(200)
+        self.max_slider.setFixedHeight(100)
+        self.max_slider.setFixedWidth(30)
         self.max_slider.setMinimum(int(self.hm_min * 1000))
         self.max_slider.setMaximum(int(self.hm_max * 1000))
         self.max_slider.setValue(int(self.hm_max * 1000))
@@ -137,15 +170,16 @@ class HeatmapModule(BaseModule):
 
         # Min slider (bottom)
         self.min_slider = QSlider(Qt.Orientation.Vertical)
-        self.min_slider.setFixedHeight(200)
+        self.min_slider.setFixedHeight(100)
+        self.min_slider.setFixedWidth(30)
         self.min_slider.setMinimum(int(self.hm_min * 1000))
         self.min_slider.setMaximum(int(self.hm_max * 1000))
         self.min_slider.setValue(int(self.hm_min * 1000))
         self.min_slider.valueChanged.connect(self.update_levels)
         slider_layout.addWidget(self.min_slider)
 
-        layout.addWidget(slider_container)
-        layout.addWidget(self.hm_widget)
+        layout.addWidget(slider_container, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(self.hm_widget, 1)
 
     def update_frame(self, frame_idx: int):
         half_win = self.win // 2
@@ -220,7 +254,7 @@ class Projection3DModule(BaseModule):
         self.widget.setCameraPosition(distance=1.25)
 
         # Scatter plot item
-        self.scatter = gl.GLScatterPlotItem(pos=np.zeros((1, 3)), color=(1, 0, 1, 1), size=3)
+        self.scatter = gl.GLScatterPlotItem(pos=np.zeros((1, 3)), color=(1, 0, 1, 1), size=0.1)
         self.widget.addItem(self.scatter)
 
         # Layout wrapper
@@ -256,10 +290,10 @@ class Projection3DModule(BaseModule):
                 seg_len = end_clip - start_clip
                 # Generate colors spanning full colormap
                 seg_colors = cmap(np.linspace(0, 1, seg_len))
-                seg_colors[:, 3] = 0.8  # alpha for trial segments
+                seg_colors[:, 3] = 0.08  # alpha for trial segments
                 colors[start_clip:end_clip] = seg_colors
 
-        self.scatter.setData(pos=positions, color=colors, size=5)
+        self.scatter.setData(pos=positions, color=colors, size=6)
 
     def init_camera(self):
         if self.data is None or len(self.data) == 0:
