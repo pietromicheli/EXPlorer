@@ -10,7 +10,7 @@ class TimeSeriesViewer(QMainWindow):
     def __init__(self, layout_config, data_dict, fps, win=600):
         super().__init__()
         self.setStyleSheet("background-color: black; color: white;")  # make entire app black
-
+        self.fps = fps
         self.modules = []
         self.frame_idx = 0
         self.win = win
@@ -95,7 +95,7 @@ class TimeSeriesViewer(QMainWindow):
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
-        self.timer.start(int(1000//FPS))
+        self.timer.start(int(1000//self.fps))
 
     def make_module(self, elem, data_dict):
         t = elem['type']
@@ -114,7 +114,7 @@ class TimeSeriesViewer(QMainWindow):
         self.slider.blockSignals(True)
         self.slider.setValue(self.frame_idx)
         self.slider.blockSignals(False)
-        time_sec = self.frame_idx / FPS
+        time_sec = self.frame_idx / self.fps
         mins, secs = divmod(int(time_sec), 60)
         self.time_label.setText(f"{mins:02}:{secs:02}")
 
